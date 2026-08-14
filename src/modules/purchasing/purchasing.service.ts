@@ -1,18 +1,18 @@
 import { Injectable } from '@nitrostack/core';
 import { DatabaseService } from '../database/database.service.js';
 import { ObjectId } from 'mongodb';
-import { Movement, Sku } from '../inventory/inventory.service.js';
+import { Sku, Movement } from '../inventory/inventory.service.js';
 
-export interface PurchaseOrder {
+export interface Contract {
   _id?: ObjectId;
-  poNumber: string;
   sku: string;
-  supplierId: string;
   quantity: number;
-  receivedQuantity: number;
-  status: 'DRAFT' | 'APPROVED' | 'SENT' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
-  createdBy: string;
-  approvedBy?: string;
+  warehouseId: string;
+  supplierId: string | null;
+  supplierName: string | null;
+  status: 'REQUESTED' | 'TAKEN' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'RECEIVED';
+  createdBy: string; // The manager's userId/subject
+  approvedBy?: string; // The manager who approved the supplier's take
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,134 +21,206 @@ export interface PurchaseOrder {
 export class PurchasingService {
   constructor(private readonly db: DatabaseService) {}
 
-  private get pos() { return this.db.getDb().collection<PurchaseOrder>('purchase_orders'); }
+  private get contracts() { return this.db.getDb().collection<Contract>('contracts'); }
   private get skus() { return this.db.getDb().collection<Sku>('skus'); }
   private get movements() { return this.db.getDb().collection<Movement>('movements'); }
 
-  async generateDraftPO(skuCode: string, createdBy: string) {
+  async requestStock(skuCode: string, quantity: number, warehouseId: string, managerId: string) {
     const sku = await this.skus.findOne({ sku: skuCode });
-    if (!sku) throw new Error(`SKU ${skuCode} not found.`);
-
-    const existing = await this.pos.findOne({
-      sku: skuCode,
-      status: { $in: ['DRAFT', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED'] }
-    });
-
-    if (existing) {
-      throw new Error(`An open PO (${existing.poNumber}) already exists for SKU ${skuCode}.`);
+    if (!sku) {
+      throw new Error(`SKU ${skuCode} not found in catalog.`);
     }
 
-    const po: PurchaseOrder = {
-      poNumber: `PO-${Date.now()}`,
+    const locExists = sku.locations.some(l => l.warehouseId === warehouseId);
+    if (!locExists) {
+      throw new Error(`SKU ${skuCode} is not stocked in warehouse ${warehouseId}.`);
+    }
+
+    const contract: Contract = {
       sku: skuCode,
-      supplierId: sku.preferredSupplierId,
-      quantity: sku.reorderQuantity,
-      receivedQuantity: 0,
-      status: 'DRAFT',
-      createdBy,
+      quantity,
+      warehouseId,
+      supplierId: null,
+      supplierName: null,
+      status: 'REQUESTED',
+      createdBy: managerId,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     };
 
-    await this.pos.insertOne(po);
-    return po;
+    const result = await this.contracts.insertOne(contract);
+    return { ...contract, _id: result.insertedId };
   }
 
-  async approvePO(poId: string, approvedBy: string) {
-    const objectId = new ObjectId(poId);
-    const po = await this.pos.findOne({ _id: objectId });
-    if (!po) throw new Error('PO not found.');
-    if (po.status !== 'DRAFT') throw new Error('Only DRAFT POs can be approved.');
-    if (po.createdBy === approvedBy) throw new Error('A PO cannot be approved by its creator.');
+  async listPendingContracts() {
+    return this.contracts.find({ status: 'TAKEN' }).toArray();
+  }
 
-    await this.pos.updateOne(
+  async approveContract(contractId: string, managerId: string) {
+    const objectId = new ObjectId(contractId);
+    const contract = await this.contracts.findOne({ _id: objectId });
+    if (!contract) throw new Error('Contract not found.');
+    if (contract.status !== 'TAKEN') {
+      throw new Error(`Only TAKEN contracts can be approved. Current status: ${contract.status}`);
+    }
+
+    await this.contracts.updateOne(
       { _id: objectId },
-      { $set: { status: 'APPROVED', approvedBy, updatedAt: new Date() } }
+      { $set: { status: 'APPROVED', approvedBy: managerId, updatedAt: new Date() } }
     );
-    return { success: true, message: 'PO approved.' };
+
+    // Also update SKU preferred supplier and unit cost if supplier is active
+    // Wait, let's just mark the contract as approved.
+    return { success: true, message: `Contract approved by manager ${managerId}.` };
   }
 
-  async sendPO(poId: string) {
-    const objectId = new ObjectId(poId);
-    const po = await this.pos.findOne({ _id: objectId });
-    if (!po) throw new Error('PO not found.');
-    if (po.status !== 'APPROVED') throw new Error('Only APPROVED POs can be sent.');
+  async rejectContract(contractId: string) {
+    const objectId = new ObjectId(contractId);
+    const contract = await this.contracts.findOne({ _id: objectId });
+    if (!contract) throw new Error('Contract not found.');
+    if (contract.status !== 'TAKEN') {
+      throw new Error(`Only TAKEN contracts can be rejected. Current status: ${contract.status}`);
+    }
 
-    await this.pos.updateOne(
+    // Reset status back to REQUESTED and clear supplier info so other suppliers can take it
+    await this.contracts.updateOne(
       { _id: objectId },
-      { $set: { status: 'SENT', updatedAt: new Date() } }
+      { $set: { status: 'REQUESTED', supplierId: null, supplierName: null, updatedAt: new Date() } }
     );
-    return { success: true, message: 'PO sent.' };
+
+    return { success: true, message: 'Contract rejected and returned to REQUESTED status.' };
   }
 
-  async cancelPO(poId: string) {
-    const objectId = new ObjectId(poId);
-    const po = await this.pos.findOne({ _id: objectId });
-    if (!po) throw new Error('PO not found.');
-    if (!['DRAFT', 'APPROVED'].includes(po.status)) throw new Error('Only DRAFT or APPROVED POs can be cancelled.');
+  async cancelContract(contractId: string) {
+    const objectId = new ObjectId(contractId);
+    const contract = await this.contracts.findOne({ _id: objectId });
+    if (!contract) throw new Error('Contract not found.');
+    if (['RECEIVED', 'CANCELLED'].includes(contract.status)) {
+      throw new Error(`Cannot cancel contract in status: ${contract.status}`);
+    }
 
-    await this.pos.updateOne(
+    await this.contracts.updateOne(
       { _id: objectId },
       { $set: { status: 'CANCELLED', updatedAt: new Date() } }
     );
-    return { success: true, message: 'PO cancelled.' };
+
+    return { success: true, message: 'Contract successfully cancelled.' };
   }
 
-  async receivePO(poId: string, quantity: number, warehouseId: string, tolerancePercent = 5) {
-    const objectId = new ObjectId(poId);
-    
+  async receiveContract(contractId: string, warehouseId: string) {
+    const objectId = new ObjectId(contractId);
     const session = this.db.getClient().startSession();
+
     try {
       let result;
       await session.withTransaction(async () => {
-        const po = await this.pos.findOne({ _id: objectId }, { session });
-        if (!po) throw new Error('PO not found.');
-        if (!['SENT', 'PARTIALLY_RECEIVED'].includes(po.status)) {
-          throw new Error('Only SENT or PARTIALLY_RECEIVED POs can be received.');
+        const contract = await this.contracts.findOne({ _id: objectId }, { session });
+        if (!contract) throw new Error('Contract not found.');
+        if (contract.status !== 'APPROVED') {
+          throw new Error(`Only APPROVED contracts can be received. Current status: ${contract.status}`);
         }
 
-        const newReceivedTotal = po.receivedQuantity + quantity;
-        const maxAllowed = po.quantity * (1 + tolerancePercent / 100);
-
-        if (newReceivedTotal > maxAllowed) {
-          throw new Error(`Received quantity exceeds tolerance limit. Max allowed total receipt is ${maxAllowed}.`);
-        }
-
-        const newStatus = newReceivedTotal >= po.quantity ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
-
-        await this.pos.updateOne(
+        // Update contract status to RECEIVED
+        await this.contracts.updateOne(
           { _id: objectId },
-          { $set: { receivedQuantity: newReceivedTotal, status: newStatus, updatedAt: new Date() } },
+          { $set: { status: 'RECEIVED', updatedAt: new Date() } },
           { session }
         );
 
-        const sku = await this.skus.findOne({ sku: po.sku }, { session });
-        if (!sku) throw new Error(`SKU ${po.sku} not found.`);
+        // Find the SKU to verify it exists
+        const sku = await this.skus.findOne({ sku: contract.sku }, { session });
+        if (!sku) throw new Error(`SKU ${contract.sku} not found.`);
 
         const locIndex = sku.locations.findIndex(l => l.warehouseId === warehouseId);
-        if (locIndex === -1) throw new Error(`SKU ${po.sku} not found in warehouse ${warehouseId}.`);
+        if (locIndex === -1) {
+          throw new Error(`SKU ${contract.sku} not configured for warehouse ${warehouseId}.`);
+        }
 
+        // Update stock levels
         await this.skus.updateOne(
-          { sku: po.sku, 'locations.warehouseId': warehouseId },
-          { $inc: { onHand: quantity, 'locations.$.onHand': quantity } },
+          { sku: contract.sku, 'locations.warehouseId': warehouseId },
+          {
+            $inc: {
+              onHand: contract.quantity,
+              'locations.$.onHand': contract.quantity,
+            },
+          },
           { session }
         );
 
+        // Record the stock receipt movement
         const movement: Movement = {
-          sku: po.sku,
+          sku: contract.sku,
           type: 'RECEIPT',
           toWarehouseId: warehouseId,
-          quantity,
-          reason: `PO Receipt for ${po.poNumber}`,
-          timestamp: new Date()
+          quantity: contract.quantity,
+          reason: `Contract Fulfillment for ${contractId}`,
+          timestamp: new Date(),
         };
-        await this.movements.insertOne(movement, { session });
 
-        result = { success: true, status: newStatus };
+        await this.movements.insertOne(movement, { session });
+        result = { success: true, message: `Contract received successfully. Added ${contract.quantity} units to ${warehouseId}.` };
       });
       return result;
     } finally {
       await session.endSession();
     }
+  }
+
+  // Manager proposal approval
+  async approveProposal(proposalId: string) {
+    const objectId = new ObjectId(proposalId);
+    const proposalColl = this.db.getDb().collection('proposals');
+    const proposal = await proposalColl.findOne({ _id: objectId });
+    if (!proposal) throw new Error('Proposal not found.');
+    if (proposal.status !== 'PENDING') {
+      throw new Error(`Proposal is not pending (current status: ${proposal.status}).`);
+    }
+
+    await proposalColl.updateOne(
+      { _id: objectId },
+      { $set: { status: 'APPROVED' } }
+    );
+
+    // Register SKU in inventory if it does not already exist
+    const sku = await this.skus.findOne({ sku: proposal.sku });
+    if (!sku) {
+      const locations = ['WH-MAIN']; // Default warehouse location
+      const newSkuData = {
+        sku: proposal.sku,
+        description: proposal.description,
+        reorderPoint: 10,
+        reorderQuantity: 50,
+        preferredSupplierId: proposal.supplierId,
+        unitCost: proposal.unitCost,
+        locations,
+      };
+      // Let's invoke the inventory service method or register it directly
+      const locationsArray = locations.map(warehouseId => ({ warehouseId, onHand: 0, reserved: 0 }));
+      await this.skus.insertOne({
+        sku: newSkuData.sku,
+        description: newSkuData.description,
+        onHand: 0,
+        reserved: 0,
+        reorderPoint: newSkuData.reorderPoint,
+        reorderQuantity: newSkuData.reorderQuantity,
+        preferredSupplierId: newSkuData.preferredSupplierId,
+        unitCost: newSkuData.unitCost,
+        locations: locationsArray,
+      });
+    } else {
+      // Update unitCost and preferred supplier
+      await this.skus.updateOne(
+        { sku: proposal.sku },
+        {
+          $set: {
+            preferredSupplierId: proposal.supplierId,
+            unitCost: proposal.unitCost,
+          },
+        }
+      );
+    }
+
+    return { success: true, message: 'Proposal approved. SKU updated in catalog.' };
   }
 }

@@ -4,7 +4,7 @@ import { DatabaseModule } from './modules/database/database.module.js';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
 import { PurchasingModule } from './modules/purchasing/purchasing.module.js';
 import { SupplierModule } from './modules/supplier/supplier.module.js';
-import { ReportingModule } from './modules/reporting/reporting.module.js';
+import { FormModule } from './modules/form/form.module.js';
 import { SharedModule } from './modules/shared/shared.module.js';
 
 /**
@@ -32,7 +32,7 @@ import { SharedModule } from './modules/shared/shared.module.js';
         SupplierModule,
         InventoryModule,
         PurchasingModule,
-        ReportingModule,
+        FormModule,
     ],
 })
 export class AppModule { }

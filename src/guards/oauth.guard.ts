@@ -4,36 +4,28 @@ import jwksClient from 'jwks-rsa';
 
 @Injectable()
 export class OAuthGuard implements Guard {
-  private jwksClient: jwksClient.JwksClient;
+  private jwksClient?: jwksClient.JwksClient;
 
   constructor() {
     const authServerUrl = process.env.AUTH_SERVER_URL;
-    
-    this.jwksClient = jwksClient({
-      jwksUri: `${authServerUrl}/.well-known/jwks.json`
-    });
+    if (authServerUrl) {
+      this.jwksClient = jwksClient({
+        jwksUri: `${authServerUrl}/.well-known/jwks.json`
+      });
+    }
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const token = this.extractToken(context);
-    
-    const generateLoginLink = () => {
-      const authUrl = process.env.AUTH_SERVER_URL;
-      const clientId = process.env.CLIENT_ID;
-      const audience = process.env.AUDIENCE;
-      const redirectUri = process.env.REDIRECT_URI || 'http://localhost:3000/callback';
-      
-      if (!authUrl || !clientId) return null;
-      return `${authUrl}/authorize?response_type=code&client_id=${clientId}&audience=${audience}&redirect_uri=${redirectUri}&scope=openid profile email`;
-    };
 
     if (!token) {
       console.error('OAuthGuard: No token found');
-      const loginLink = generateLoginLink();
-      if (loginLink) {
-        throw new Error(`You are not authenticated. Please log in by clicking this link: ${loginLink}`);
-      }
-      throw new Error('You are not authenticated. (Auth server configuration missing)');
+      throw new Error('Authentication required: Token is missing.');
+    }
+
+    if (!this.jwksClient) {
+      console.error('OAuthGuard: Auth server url not configured');
+      throw new Error('Authentication required: Auth server configuration is missing.');
     }
 
     try {
@@ -48,11 +40,7 @@ export class OAuthGuard implements Guard {
       return true;
     } catch (err) {
       console.error('OAuthGuard: Token verification failed', err);
-      const loginLink = generateLoginLink();
-      if (loginLink) {
-        throw new Error(`Your session is invalid or expired. Please log in again: ${loginLink}`);
-      }
-      throw new Error('Your session is invalid or expired. Please log in again.');
+      throw new Error('Authentication required: Token is invalid or expired.');
     }
   }
 
@@ -79,6 +67,9 @@ export class OAuthGuard implements Guard {
   private verifyToken(token: string): Promise<any> {
     return new Promise((resolve, reject) => {
       const getKey = (header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) => {
+        if (!this.jwksClient) {
+          return callback(new Error('JWKS client is not initialized'));
+        }
         this.jwksClient.getSigningKey(header.kid, (err, key) => {
           if (err || !key) {
             return callback(err || new Error('No key found'));

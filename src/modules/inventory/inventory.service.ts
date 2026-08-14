@@ -8,19 +8,6 @@ export interface SkuLocation {
   reserved: number;
 }
 
-export interface CycleCount {
-  _id?: ObjectId;
-  sku: string;
-  warehouseId: string;
-  expectedQuantity: number;
-  actualQuantity?: number;
-  variance?: number;
-  status: 'STARTED' | 'COUNTED' | 'REVIEW_PENDING' | 'APPROVED';
-  startedAt: Date;
-  countedAt?: Date;
-  varianceReason?: string;
-}
-
 export interface Sku {
   _id?: ObjectId;
   sku: string;
@@ -31,12 +18,13 @@ export interface Sku {
   reorderQuantity: number;
   preferredSupplierId: string;
   locations: SkuLocation[];
+  unitCost?: number;
 }
 
 export interface Movement {
   _id?: ObjectId;
   sku: string;
-  type: 'ADJUSTMENT' | 'TRANSFER' | 'RECEIPT' | 'CYCLE_COUNT';
+  type: 'ADJUSTMENT' | 'TRANSFER' | 'RECEIPT';
   fromWarehouseId?: string;
   toWarehouseId?: string;
   quantity: number;
@@ -50,7 +38,6 @@ export class InventoryService {
 
   private get skus() { return this.db.getDb().collection<Sku>('skus'); }
   private get movements() { return this.db.getDb().collection<Movement>('movements'); }
-  private get cycleCounts() { return this.db.getDb().collection<CycleCount>('cycle_counts'); }
 
   async getStockLevel(skuCode: string, warehouseId?: string) {
     const sku = await this.skus.findOne({ sku: skuCode });
@@ -175,80 +162,6 @@ export class InventoryService {
         };
         await this.movements.insertOne(movement, { session });
         result = movement;
-      });
-      return result;
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  async startCycleCount(skuCode: string, warehouseId: string) {
-    const sku = await this.skus.findOne({ sku: skuCode });
-    if (!sku) throw new Error(`SKU ${skuCode} not found.`);
-
-    const loc = sku.locations.find(l => l.warehouseId === warehouseId);
-    if (!loc) throw new Error(`SKU ${skuCode} not found in warehouse ${warehouseId}.`);
-
-    const cycleCount: CycleCount = {
-      sku: skuCode,
-      warehouseId,
-      expectedQuantity: loc.onHand, // Including reserved as they physically exist
-      status: 'STARTED',
-      startedAt: new Date()
-    };
-
-    await this.cycleCounts.insertOne(cycleCount);
-    return cycleCount;
-  }
-
-  async recordCycleCount(countId: string, actualQuantity: number) {
-    const objectId = new ObjectId(countId);
-    const session = this.db.getClient().startSession();
-
-    try {
-      let result;
-      await session.withTransaction(async () => {
-        const count = await this.cycleCounts.findOne({ _id: objectId }, { session });
-        if (!count) throw new Error('Cycle count not found.');
-        if (count.status !== 'STARTED') throw new Error('Only STARTED cycle counts can be recorded.');
-
-        const variance = actualQuantity - count.expectedQuantity;
-        const newStatus = 'COUNTED';
-
-        await this.cycleCounts.updateOne(
-          { _id: objectId },
-          { $set: { actualQuantity, variance, status: newStatus, countedAt: new Date() } },
-          { session }
-        );
-
-        if (variance !== 0) {
-          // Auto-adjust for any variance
-          await this.skus.updateOne(
-            { sku: count.sku, 'locations.warehouseId': count.warehouseId },
-            { $inc: { onHand: variance, 'locations.$.onHand': variance } },
-            { session }
-          );
-
-          const movement: Movement = {
-            sku: count.sku,
-            type: 'CYCLE_COUNT',
-            toWarehouseId: count.warehouseId,
-            quantity: Math.abs(variance), // Keep quantity positive
-            reason: `Auto-adjusted from Cycle Count ${countId}`,
-            timestamp: new Date()
-          };
-          // For movement, we should know if it's adding or removing
-          // If variance is positive, we add to warehouse (toWarehouseId)
-          // If variance is negative, we remove from warehouse (fromWarehouseId)
-          if (variance < 0) {
-              movement.fromWarehouseId = count.warehouseId;
-              delete movement.toWarehouseId;
-          }
-
-          await this.movements.insertOne(movement, { session });
-        }
-
-        result = { success: true, variance, status: newStatus };
       });
       return result;
     } finally {
