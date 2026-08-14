@@ -1,0 +1,43 @@
+{
+  "name": "warehouse-management",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Inventory & Warehouse Reorder MCP Server",
+  "scripts": {
+    "dev": "nitrostack-cli dev",
+    "build": "nitrostack-cli build",
+    "start": "npm run build && nitrostack-cli start",
+    "start:prod": "nitrostack-cli start",
+    "upgrade": "nitrostack-cli upgrade",
+    "install:all": "nitrostack-cli install"
+  },
+  "keywords": [
+    "nitrostack",
+    "mcp",
+    "warehouse",
+    "inventory",
+    "mongodb"
+  ],
+  "author": "Aadarsh Mahesh K",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": ">=0.1.0",
+    "@nitrostack/core": "^1",
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.3",
+    "jwks-rsa": "^4.1.0",
+    "mongodb": "^7.5.0",
+    "reflect-metadata": "^0.2.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@nitrostack/cli": "^1",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.3.3"
+  },
+  "nitrostack": {
+    "skillsVersion": "1.0.0"
+  }
+}

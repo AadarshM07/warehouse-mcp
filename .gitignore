@@ -1,0 +1,12 @@
+node_modules/
+dist
+.env
+.gemini
+.claude
+.antigravity
+.cursor
+.copilot
+.opencode
+.codex
+.agents/
+.nitrostudio/
