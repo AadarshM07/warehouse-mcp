@@ -26,44 +26,21 @@ export class SupplierTools {
   @UseGuards(OAuthGuard, SupplierGuard)
   @Tool({
     name: 'submit_proposal',
-    description: 'Submits a bulk inventory proposal with cost details to the warehouse catalog (Supplier only).',
+    description: 'Submits a proposal for a needed stock requirement (Supplier only).',
     inputSchema: z.object({
-      sku: z.string().describe('SKU code of the proposed item'),
-      description: z.string().describe('Basic details and description about the item'),
-      bulkQuantity: z.number().int().positive().describe('Quantity available in bulk load'),
-      unitCost: z.number().positive().describe('Cost of each unit of that item'),
+      neededStockId: z.string().describe('The MongoDB ObjectID of the needed stock requirement'),
+      warehouseId: z.string().describe('The warehouse ID where you will supply the stock'),
+      bulkQuantity: z.number().int().positive().describe('The quantity you can supply'),
+      unitCost: z.number().positive().describe('The unit cost of the proposed stock'),
     }),
   })
   async submitProposal(
-    input: { sku: string; description: string; bulkQuantity: number; unitCost: number },
+    input: { neededStockId: string; warehouseId: string; bulkQuantity: number; unitCost: number },
     context: ExecutionContext
   ) {
     const userId = (context as any).auth?.subject;
     if (!userId) throw new Error('Unauthenticated user.');
-    return this.supplierService.submitProposal(userId, input.sku, input.description, input.bulkQuantity, input.unitCost);
+    return this.supplierService.submitProposal(userId, input.neededStockId, input.warehouseId, input.bulkQuantity, input.unitCost);
   }
 
-  @UseGuards(OAuthGuard, SupplierGuard)
-  @Tool({
-    name: 'list_available_contracts',
-    description: 'Lists all open warehouse stock request contracts available for bidding (Supplier only).',
-    inputSchema: z.object({}),
-  })
-  async listAvailableContracts() {
-    return this.supplierService.listAvailableContracts();
-  }
-
-  @UseGuards(OAuthGuard, SupplierGuard)
-  @Tool({
-    name: 'take_contract',
-    description: 'Accepts/claims an open warehouse stock request contract (Supplier only).',
-    inputSchema: z.object({
-      contractId: z.string().describe('The MongoDB ObjectID of the contract to take'),
-    }),
-  })
-  async takeContract(input: { contractId: string }, context: ExecutionContext) {
-    const userId = (context as any).auth?.subject;
-    if (!userId) throw new Error('Unauthenticated user.');
-    return this.supplierService.takeContract(input.contractId, userId);
-  }
 }

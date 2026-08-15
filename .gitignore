@@ -10,3 +10,8 @@ dist
 .codex
 .agents/
 .nitrostudio/
+
+
+# Next.js build output
+src/widgets/.next/
+src/widgets/out/

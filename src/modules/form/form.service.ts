@@ -15,7 +15,7 @@ export interface FormQuestion {
 export interface FormSession {
   _id?: ObjectId;
   userId: string;
-  formType: 'register_sku' | 'create_profile' | 'request_stock' | 'submit_proposal';
+  formType: 'register_sku' | 'create_profile' | 'submit_proposal';
   currentStep: number;
   answers: Record<string, any>;
   createdAt: Date;
@@ -28,7 +28,6 @@ const FORM_QUESTIONS: Record<string, FormQuestion[]> = {
     { field: 'description', prompt: 'Please enter a description for the SKU:', type: 'string', required: true },
     { field: 'reorderPoint', prompt: 'Enter the reorder point (minimum stock level, e.g., 10):', type: 'number', required: true },
     { field: 'reorderQuantity', prompt: 'Enter the reorder quantity (amount to order when triggered, e.g., 50):', type: 'number', required: true },
-    { field: 'preferredSupplierId', prompt: 'Enter the preferred supplier ID:', type: 'string', required: true },
     { field: 'locations', prompt: 'Enter warehouse locations as a comma-separated list (e.g., WH-MAIN, WH-EAST):', type: 'string', required: true },
     { field: 'unitCost', prompt: 'Enter the unit cost (optional, or enter 0):', type: 'number', required: false },
   ],
@@ -36,15 +35,10 @@ const FORM_QUESTIONS: Record<string, FormQuestion[]> = {
     { field: 'companyName', prompt: 'Enter your supplier company name:', type: 'string', required: true },
     { field: 'contactEmail', prompt: 'Enter the primary contact email for your company:', type: 'email', required: true },
   ],
-  request_stock: [
-    { field: 'sku', prompt: 'Enter the SKU code of the item you want to order:', type: 'string', required: true },
-    { field: 'quantity', prompt: 'Enter the quantity to order:', type: 'number', required: true },
-    { field: 'warehouseId', prompt: 'Enter the warehouse ID where stock should be delivered (e.g., WH-MAIN):', type: 'string', required: true },
-  ],
   submit_proposal: [
-    { field: 'sku', prompt: 'Enter the SKU code of the proposed item:', type: 'string', required: true },
-    { field: 'description', prompt: 'Enter the description or basic details about this item:', type: 'string', required: true },
-    { field: 'bulkQuantity', prompt: 'Enter the bulk quantity available:', type: 'number', required: true },
+    { field: 'neededStockId', prompt: 'Enter the ID of the needed stock requirement:', type: 'string', required: true },
+    { field: 'warehouseId', prompt: 'Enter the warehouse ID where you will supply the stock:', type: 'string', required: true },
+    { field: 'bulkQuantity', prompt: 'Enter the bulk quantity you can supply:', type: 'number', required: true },
     { field: 'unitCost', prompt: 'Enter the unit cost per item:', type: 'number', required: true },
   ],
 };
@@ -67,7 +61,7 @@ export class FormService {
       throw new Error(`Invalid form type: ${formType}. Supported types: ${Object.keys(FORM_QUESTIONS).join(', ')}`);
     }
 
-    if (['register_sku', 'request_stock'].includes(formType) && role !== 'manager' && role !== 'admin') {
+    if (formType === 'register_sku' && role !== 'manager' && role !== 'admin') {
       throw new Error('Unauthorized: Only warehouse managers can fill this form.');
     }
 
@@ -217,21 +211,19 @@ export class FormService {
         description: answers.description,
         reorderPoint: answers.reorderPoint,
         reorderQuantity: answers.reorderQuantity,
-        preferredSupplierId: answers.preferredSupplierId,
         unitCost: answers.unitCost ? Number(answers.unitCost) : undefined,
         locations,
       });
+
     } else if (formType === 'create_profile') {
       result = await this.supplierService.createProfile(userId, answers.companyName, answers.contactEmail);
-    } else if (formType === 'request_stock') {
-      result = await this.purchasingService.requestStock(answers.sku, answers.quantity, answers.warehouseId, userId);
     } else if (formType === 'submit_proposal') {
       result = await this.supplierService.submitProposal(
         userId,
-        answers.sku,
-        answers.description,
-        answers.bulkQuantity,
-        answers.unitCost
+        answers.neededStockId,
+        answers.warehouseId,
+        Number(answers.bulkQuantity),
+        Number(answers.unitCost)
       );
     }
 

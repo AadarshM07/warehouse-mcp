@@ -1,10 +1,11 @@
 import { Module } from '@nitrostack/core';
 import { SharedResources } from './shared.resources.js';
-import { SharedPrompts } from './shared.prompts.js';
+import { SharedTools } from './shared.tools.js';
 
 @Module({
   name: 'shared',
-  controllers: [SharedResources, SharedPrompts],
-  exports: [SharedResources, SharedPrompts]
+  controllers: [SharedResources, SharedTools],
+  exports: [SharedResources, SharedTools]
 })
 export class SharedModule {}
+

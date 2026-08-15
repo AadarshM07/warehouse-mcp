@@ -1,0 +1,34 @@
+{
+  "version": "1.0.0",
+  "widgets": [
+    {
+      "uri": "/list-widget",
+      "name": "Warehouse List Widget",
+      "description": "Reusable paginated table and list viewer for warehouse objects (SKUs, proposals, stocks, warehouses)",
+      "examples": [
+        {
+          "name": "Sample List",
+          "description": "An example SKU catalog list",
+          "data": {
+            "title": "SKU Catalog",
+            "subtitle": "All registered product SKUs",
+            "items": [
+              {
+                "id": "SKU-TEST-1",
+                "title": "Widget Engine A",
+                "subtitle": "High-performance mechanical widget",
+                "badge": { "text": "OPEN", "type": "success" },
+                "details": [
+                  { "label": "On Hand", "value": 150 },
+                  { "label": "Reorder Point", "value": 20 }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tags": ["list", "table", "pagination"]
+    }
+  ],
+  "generatedAt": "2026-08-16T00:00:00.000Z"
+}

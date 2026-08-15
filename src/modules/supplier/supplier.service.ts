@@ -14,6 +14,9 @@ export interface Supplier {
 export interface Proposal {
   _id?: ObjectId;
   supplierId: string; // The supplier's userId
+  supplierName?: string;
+  neededStockId: string;
+  warehouseId: string;
   sku: string;
   description: string;
   bulkQuantity: number;
@@ -32,10 +35,6 @@ export class SupplierService {
 
   private get proposalCollection() {
     return this.db.getDb().collection<Proposal>('proposals');
-  }
-
-  private get contractCollection() {
-    return this.db.getDb().collection('contracts');
   }
 
   async getProfile(userId: string) {
@@ -60,16 +59,39 @@ export class SupplierService {
     return { ...supplier, _id: result.insertedId };
   }
 
-  async submitProposal(userId: string, sku: string, description: string, bulkQuantity: number, unitCost: number) {
+  async submitProposal(userId: string, neededStockId: string, warehouseId: string, bulkQuantity: number, unitCost: number) {
     const profile = await this.getProfile(userId);
     if (!profile) {
       throw new Error('No supplier profile found. Please create your profile first.');
     }
 
+    // Validate neededStockId
+    const neededStockColl = this.db.getDb().collection('needed_stocks');
+    const neededStock = await neededStockColl.findOne({ _id: new ObjectId(neededStockId) });
+    if (!neededStock) {
+      throw new Error(`Needed stock requirement with ID ${neededStockId} not found.`);
+    }
+    if (neededStock.status !== 'OPEN') {
+      throw new Error(`This stock requirement is already fulfilled.`);
+    }
+
+    // Validate warehouseId
+    const warehouseColl = this.db.getDb().collection('warehouses');
+    const warehouse = await warehouseColl.findOne({ warehouseId });
+    if (!warehouse) {
+      throw new Error(`Warehouse ${warehouseId} does not exist.`);
+    }
+    if (neededStock.warehouseId !== warehouseId) {
+      throw new Error(`Warehouse mismatch: Requirement is for ${neededStock.warehouseId}, but proposal is for ${warehouseId}.`);
+    }
+
     const proposal: Proposal = {
       supplierId: userId,
-      sku,
-      description,
+      supplierName: profile.companyName,
+      neededStockId: neededStockId,
+      warehouseId: warehouseId,
+      sku: neededStock.sku,
+      description: `Proposal for needed stock ${neededStockId}`,
       bulkQuantity,
       unitCost,
       status: 'PENDING',
@@ -78,44 +100,5 @@ export class SupplierService {
 
     const result = await this.proposalCollection.insertOne(proposal);
     return { ...proposal, _id: result.insertedId };
-  }
-
-  async listAvailableContracts() {
-    return this.contractCollection.find({ status: 'REQUESTED' }).toArray();
-  }
-
-  async takeContract(contractId: string, userId: string) {
-    const profile = await this.getProfile(userId);
-    if (!profile) {
-      throw new Error('No supplier profile found. Please create your profile first.');
-    }
-
-    const objectId = new ObjectId(contractId);
-    const contract = await this.contractCollection.findOne({ _id: objectId });
-    if (!contract) {
-      throw new Error('Contract not found.');
-    }
-
-    if (contract.status !== 'REQUESTED') {
-      throw new Error(`Contract is not available to take (current status: ${contract.status}).`);
-    }
-
-    const result = await this.contractCollection.updateOne(
-      { _id: objectId, status: 'REQUESTED' },
-      {
-        $set: {
-          status: 'TAKEN',
-          supplierId: userId,
-          supplierName: profile.companyName,
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    if (result.modifiedCount === 0) {
-      throw new Error('Failed to take contract. It may have been claimed by another supplier.');
-    }
-
-    return { success: true, message: 'Contract taken successfully. Pending manager approval.' };
   }
 }

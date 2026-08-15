@@ -10,9 +10,9 @@ export class FormTools {
   @UseGuards(OAuthGuard)
   @Tool({
     name: 'start_form_session',
-    description: 'Starts a new stateful form session for multi-field input (e.g. register_sku, create_profile, request_stock, submit_proposal). Returns the first question.',
+    description: 'Starts a new stateful form session for multi-field input (e.g. register_sku, create_profile, submit_proposal). Returns the first question.',
     inputSchema: z.object({
-      formType: z.enum(['register_sku', 'create_profile', 'request_stock', 'submit_proposal']).describe('The type of form to fill'),
+      formType: z.enum(['register_sku', 'create_profile', 'submit_proposal']).describe('The type of form to fill'),
     }),
   })
   async startFormSession(input: { formType: string }, context: ExecutionContext) {
