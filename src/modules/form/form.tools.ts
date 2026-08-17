@@ -12,7 +12,7 @@ export class FormTools {
     name: 'start_form_session',
     description: 'Starts a new stateful form session for multi-field input (e.g. register_sku, create_profile, submit_proposal). Returns the first question.',
     inputSchema: z.object({
-      formType: z.enum(['register_sku', 'create_profile', 'submit_proposal']).describe('The type of form to fill'),
+      formType: z.enum(['register_sku', 'create_profile', 'submit_proposal', 'create_warehouse', 'create_reorder_contract']).describe('The type of form to fill'),
     }),
   })
   async startFormSession(input: { formType: string }, context: ExecutionContext) {

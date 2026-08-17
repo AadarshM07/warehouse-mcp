@@ -1,6 +1,6 @@
 import { ControllerDecorator as Controller, ToolDecorator as Tool, Widget, Injectable, z, UseGuards, ExecutionContext } from '@nitrostack/core';
 import { OAuthGuard } from '../../guards/oauth.guard.js';
-import { ManagerGuard } from '../../guards/role.guard.js';
+import { ManagerGuard, SupplierGuard } from '../../guards/role.guard.js';
 import { PurchasingService } from './purchasing.service.js';
 
 @Controller('purchasing')
@@ -106,6 +106,75 @@ export class PurchasingTools {
         ]
       }))
     };
+  }
+
+  @UseGuards(OAuthGuard, ManagerGuard)
+  @Tool({
+    name: 'create_reorder_contract',
+    description: 'Creates a pending reorder contract for a supplier (Manager only).',
+    inputSchema: z.object({
+      sku: z.string().describe('The SKU code'),
+      reorderPoint: z.number().int().min(0).describe('Stock level that triggers reorder'),
+      reorderQuantity: z.number().int().min(1).describe('Quantity to order when triggered'),
+      supplierId: z.string().describe('The supplier user ID'),
+    }),
+  })
+  async createReorderContract(input: { sku: string; reorderPoint: number; reorderQuantity: number; supplierId: string }) {
+    return this.purchasingService.createReorderContract(input.sku, input.reorderPoint, input.reorderQuantity, input.supplierId);
+  }
+
+  @UseGuards(OAuthGuard, SupplierGuard)
+  @Tool({
+    name: 'list_supplier_contracts',
+    description: 'Lists all reorder contracts for the logged-in supplier (Supplier only).',
+    inputSchema: z.object({}),
+  })
+  @Widget('contracts-widget')
+  async listSupplierContracts(input: any, context: ExecutionContext) {
+    const userId = (context as any).auth?.subject;
+    if (!userId) throw new Error('Unauthenticated.');
+    const contracts = await this.purchasingService.listSupplierContracts(userId);
+    return {
+      title: 'Supplier Contracts Dashboard',
+      subtitle: 'Review and approve reorder agreements for inventory items',
+      items: contracts.map(c => ({
+        id: c._id?.toString(),
+        sku: c.sku,
+        reorderPoint: c.reorderPoint,
+        reorderQuantity: c.reorderQuantity,
+        status: c.status,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt
+      }))
+    };
+  }
+
+  @UseGuards(OAuthGuard, SupplierGuard)
+  @Tool({
+    name: 'approve_reorder_contract',
+    description: 'Approves a pending reorder contract (Supplier only).',
+    inputSchema: z.object({
+      contractId: z.string().describe('The MongoDB ObjectID of the contract to approve'),
+    }),
+  })
+  async approveReorderContract(input: { contractId: string }, context: ExecutionContext) {
+    const userId = (context as any).auth?.subject;
+    if (!userId) throw new Error('Unauthenticated.');
+    return this.purchasingService.approveContract(input.contractId, userId);
+  }
+
+  @UseGuards(OAuthGuard, SupplierGuard)
+  @Tool({
+    name: 'reject_reorder_contract',
+    description: 'Rejects a pending reorder contract (Supplier only).',
+    inputSchema: z.object({
+      contractId: z.string().describe('The MongoDB ObjectID of the contract to reject'),
+    }),
+  })
+  async rejectReorderContract(input: { contractId: string }, context: ExecutionContext) {
+    const userId = (context as any).auth?.subject;
+    if (!userId) throw new Error('Unauthenticated.');
+    return this.purchasingService.rejectContract(input.contractId, userId);
   }
 }
 

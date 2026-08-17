@@ -28,6 +28,12 @@
         }
       ],
       "tags": ["list", "table", "pagination"]
+    },
+    {
+      "uri": "/contracts-widget",
+      "name": "Supplier Contracts Widget",
+      "description": "Dashboard for suppliers to view, approve, or reject auto-reorder contracts.",
+      "tags": ["dashboard", "supplier", "contracts"]
     }
   ],
   "generatedAt": "2026-08-16T00:00:00.000Z"

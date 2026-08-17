@@ -14,6 +14,18 @@ export interface NeededStock {
   updatedAt: Date;
 }
 
+export interface ReorderContract {
+  _id?: ObjectId;
+  sku: string;
+  reorderPoint: number;
+  reorderQuantity: number;
+  supplierId: string; // The supplier's userId
+  supplierName?: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 @Injectable({ deps: [DatabaseService] })
 export class PurchasingService {
   constructor(private readonly db: DatabaseService) {}
@@ -175,6 +187,103 @@ export class PurchasingService {
     } finally {
       await session.endSession();
     }
+  }
+
+  async createReorderContract(sku: string, reorderPoint: number, reorderQuantity: number, supplierId: string) {
+    const skuDoc = await this.skus.findOne({ sku });
+    if (!skuDoc) {
+      throw new Error(`SKU ${sku} does not exist in catalog.`);
+    }
+
+    const supplierColl = this.db.getDb().collection('suppliers');
+    const supplier = await supplierColl.findOne({ userId: supplierId });
+    if (!supplier) {
+      throw new Error(`Supplier with ID ${supplierId} does not exist.`);
+    }
+
+    const contract: ReorderContract = {
+      sku,
+      reorderPoint,
+      reorderQuantity,
+      supplierId,
+      supplierName: (supplier as any).companyName || (supplier as any).name || 'Unknown',
+      status: 'PENDING',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const contractColl = this.db.getDb().collection<ReorderContract>('reorder_contracts');
+    const result = await contractColl.insertOne(contract);
+    return { ...contract, _id: result.insertedId };
+  }
+
+  async listSupplierContracts(supplierId: string) {
+    const contractColl = this.db.getDb().collection<ReorderContract>('reorder_contracts');
+    return contractColl.find({ supplierId }).toArray();
+  }
+
+  async approveContract(contractId: string, supplierId: string) {
+    const contractColl = this.db.getDb().collection<ReorderContract>('reorder_contracts');
+    const objectId = new ObjectId(contractId);
+    
+    const contract = await contractColl.findOne({ _id: objectId });
+    if (!contract) throw new Error('Contract not found.');
+    if (contract.supplierId !== supplierId) {
+      throw new Error('Unauthorized: You are not the supplier for this contract.');
+    }
+    if (contract.status !== 'PENDING') {
+      throw new Error(`Contract is not pending (current status: ${contract.status}).`);
+    }
+
+    const session = this.db.getClient().startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        await contractColl.updateOne(
+          { _id: objectId },
+          { $set: { status: 'APPROVED', updatedAt: new Date() } },
+          { session }
+        );
+
+        await this.skus.updateMany(
+          { sku: contract.sku },
+          {
+            $set: {
+              reorderPoint: contract.reorderPoint,
+              reorderQuantity: contract.reorderQuantity,
+              preferredSupplierId: contract.supplierId
+            }
+          },
+          { session }
+        );
+
+        result = { success: true, message: 'Contract approved. SKU settings updated.' };
+      });
+      return result;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  async rejectContract(contractId: string, supplierId: string) {
+    const contractColl = this.db.getDb().collection<ReorderContract>('reorder_contracts');
+    const objectId = new ObjectId(contractId);
+    
+    const contract = await contractColl.findOne({ _id: objectId });
+    if (!contract) throw new Error('Contract not found.');
+    if (contract.supplierId !== supplierId) {
+      throw new Error('Unauthorized: You are not the supplier for this contract.');
+    }
+    if (contract.status !== 'PENDING') {
+      throw new Error(`Contract is not pending (current status: ${contract.status}).`);
+    }
+
+    await contractColl.updateOne(
+      { _id: objectId },
+      { $set: { status: 'REJECTED', updatedAt: new Date() } }
+    );
+
+    return { success: true, message: 'Contract rejected.' };
   }
 }
 

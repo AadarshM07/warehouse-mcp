@@ -111,6 +111,10 @@ export class InventoryService {
   }
 
   async adjustStock(skuCode: string, warehouseId: string, quantity: number, reason: string) {
+    const whExists = await this.warehouses.findOne({ warehouseId: { $regex: new RegExp(`^${warehouseId}$`, 'i') } });
+    if (!whExists) throw new Error(`Warehouse ${warehouseId} does not exist.`);
+    const normalizedWarehouseId = whExists.warehouseId;
+
     const session = this.db.getClient().startSession();
     try {
       let result;
@@ -118,16 +122,16 @@ export class InventoryService {
         const sku = await this.skus.findOne({ sku: skuCode }, { session });
         if (!sku) throw new Error(`SKU ${skuCode} not found`);
 
-        const locIndex = sku.locations.findIndex(l => l.warehouseId === warehouseId);
-        if (locIndex === -1) throw new Error(`SKU ${skuCode} not found in warehouse ${warehouseId}`);
+        const locIndex = sku.locations.findIndex(l => l.warehouseId.toLowerCase() === normalizedWarehouseId.toLowerCase());
+        if (locIndex === -1) throw new Error(`SKU ${skuCode} not found in warehouse ${normalizedWarehouseId}`);
 
         const currentAvailable = sku.locations[locIndex].onHand - sku.locations[locIndex].reserved;
         if (currentAvailable + quantity < 0) {
-          throw new Error(`Insufficient available stock for SKU ${skuCode} in warehouse ${warehouseId}. Cannot adjust by ${quantity}.`);
+          throw new Error(`Insufficient available stock for SKU ${skuCode} in warehouse ${normalizedWarehouseId}. Cannot adjust by ${quantity}.`);
         }
 
         const updateResult = await this.skus.updateOne(
-          { sku: skuCode, 'locations.warehouseId': warehouseId },
+          { sku: skuCode, 'locations.warehouseId': sku.locations[locIndex].warehouseId },
           {
             $inc: {
               onHand: quantity,
@@ -144,13 +148,16 @@ export class InventoryService {
         const movement: Movement = {
           sku: skuCode,
           type: 'ADJUSTMENT',
-          fromWarehouseId: quantity < 0 ? warehouseId : undefined,
-          toWarehouseId: quantity > 0 ? warehouseId : undefined,
+          fromWarehouseId: quantity < 0 ? sku.locations[locIndex].warehouseId : undefined,
+          toWarehouseId: quantity > 0 ? sku.locations[locIndex].warehouseId : undefined,
           quantity: Math.abs(quantity),
           reason,
           timestamp: new Date()
         };
         await this.movements.insertOne(movement, { session });
+
+        await this.checkAndTriggerReorder(skuCode, sku.locations[locIndex].warehouseId, session);
+
         result = movement;
       });
       return result;
@@ -161,13 +168,16 @@ export class InventoryService {
 
   async transferStock(skuCode: string, fromWarehouseId: string, toWarehouseId: string, quantity: number) {
     if (quantity <= 0) throw new Error('Transfer quantity must be positive.');
-    if (fromWarehouseId === toWarehouseId) throw new Error('Cannot transfer to the same warehouse.');
 
-    const fromExists = await this.warehouses.findOne({ warehouseId: fromWarehouseId });
+    const fromExists = await this.warehouses.findOne({ warehouseId: { $regex: new RegExp(`^${fromWarehouseId}$`, 'i') } });
     if (!fromExists) throw new Error(`Source warehouse ${fromWarehouseId} does not exist.`);
+    const normalizedFromId = fromExists.warehouseId;
 
-    const toExists = await this.warehouses.findOne({ warehouseId: toWarehouseId });
+    const toExists = await this.warehouses.findOne({ warehouseId: { $regex: new RegExp(`^${toWarehouseId}$`, 'i') } });
     if (!toExists) throw new Error(`Target warehouse ${toWarehouseId} does not exist.`);
+    const normalizedToId = toExists.warehouseId;
+
+    if (normalizedFromId === normalizedToId) throw new Error('Cannot transfer to the same warehouse.');
 
     const session = this.db.getClient().startSession();
     try {
@@ -176,25 +186,35 @@ export class InventoryService {
         const sku = await this.skus.findOne({ sku: skuCode }, { session });
         if (!sku) throw new Error(`SKU ${skuCode} not found`);
 
-        const fromLoc = sku.locations.find(l => l.warehouseId === fromWarehouseId);
-        const toLocIndex = sku.locations.findIndex(l => l.warehouseId === toWarehouseId);
+        const fromLoc = sku.locations.find(l => l.warehouseId.toLowerCase() === normalizedFromId.toLowerCase());
+        
+        if (!fromLoc) throw new Error(`SKU ${skuCode} not in source warehouse ${normalizedFromId}`);
 
-        if (!fromLoc) throw new Error(`SKU ${skuCode} not in source warehouse ${fromWarehouseId}`);
-        if (toLocIndex === -1) throw new Error(`SKU ${skuCode} not in target warehouse ${toWarehouseId}`);
+        let toLocIndex = sku.locations.findIndex(l => l.warehouseId.toLowerCase() === normalizedToId.toLowerCase());
+        if (toLocIndex === -1) {
+          // Dynamic target warehouse registration (safety layer fix)
+          await this.skus.updateOne(
+            { sku: skuCode },
+            { $push: { locations: { warehouseId: normalizedToId, onHand: 0, reserved: 0 } } },
+            { session }
+          );
+          sku.locations.push({ warehouseId: normalizedToId, onHand: 0, reserved: 0 });
+          toLocIndex = sku.locations.length - 1;
+        }
 
         const fromAvailable = fromLoc.onHand - fromLoc.reserved;
         if (fromAvailable < quantity) {
-          throw new Error(`Insufficient stock in ${fromWarehouseId} to transfer ${quantity} of ${skuCode}. Only ${fromAvailable} available.`);
+          throw new Error(`Insufficient stock in ${normalizedFromId} to transfer ${quantity} of ${skuCode}. Only ${fromAvailable} available.`);
         }
 
         await this.skus.updateOne(
-          { sku: skuCode, 'locations.warehouseId': fromWarehouseId },
+          { sku: skuCode, 'locations.warehouseId': fromLoc.warehouseId },
           { $inc: { 'locations.$.onHand': -quantity } },
           { session }
         );
 
         await this.skus.updateOne(
-          { sku: skuCode, 'locations.warehouseId': toWarehouseId },
+          { sku: skuCode, 'locations.warehouseId': sku.locations[toLocIndex].warehouseId },
           { $inc: { 'locations.$.onHand': quantity } },
           { session }
         );
@@ -202,17 +222,62 @@ export class InventoryService {
         const movement: Movement = {
           sku: skuCode,
           type: 'TRANSFER',
-          fromWarehouseId,
-          toWarehouseId,
+          fromWarehouseId: fromLoc.warehouseId,
+          toWarehouseId: sku.locations[toLocIndex].warehouseId,
           quantity,
           timestamp: new Date()
         };
         await this.movements.insertOne(movement, { session });
+
+        // Trigger automatic reorder check at the source warehouse since stock was reduced
+        await this.checkAndTriggerReorder(skuCode, fromLoc.warehouseId, session);
+
         result = movement;
       });
       return result;
     } finally {
       await session.endSession();
+    }
+  }
+
+  async checkAndTriggerReorder(skuCode: string, warehouseId: string, session?: any) {
+    const sku = await this.skus.findOne({ sku: skuCode }, { session });
+    if (!sku) return;
+
+    const available = sku.onHand - sku.reserved;
+    if (sku.reorderPoint !== undefined && available <= sku.reorderPoint && sku.preferredSupplierId) {
+      const contractColl = this.db.getDb().collection('reorder_contracts');
+      const contract = await contractColl.findOne({
+        sku: skuCode,
+        supplierId: sku.preferredSupplierId,
+        status: 'APPROVED'
+      }, { session });
+
+      if (contract) {
+        const qty = sku.reorderQuantity || contract.reorderQuantity || 50;
+        console.error(`[AUTO-REORDER] Triggered for SKU ${skuCode} in warehouse ${warehouseId}. Current available: ${available}, reorder point: ${sku.reorderPoint}. Auto-ordering ${qty} units.`);
+        
+        await this.skus.updateOne(
+          { sku: skuCode, 'locations.warehouseId': warehouseId },
+          {
+            $inc: {
+              onHand: qty,
+              'locations.$.onHand': qty
+            }
+          },
+          { session }
+        );
+
+        const movement: Movement = {
+          sku: skuCode,
+          type: 'RECEIPT',
+          toWarehouseId: warehouseId,
+          quantity: qty,
+          reason: `Automatic Reorder (Contract ${contract._id})`,
+          timestamp: new Date()
+        };
+        await this.movements.insertOne(movement, { session });
+      }
     }
   }
 }

@@ -41,6 +41,10 @@ export class SupplierService {
     return this.collection.findOne({ userId });
   }
 
+  async listVerifiedSuppliers() {
+    return this.collection.find({ status: 'ACTIVE' }).toArray();
+  }
+
   async createProfile(userId: string, companyName: string, contactEmail: string) {
     const existing = await this.collection.findOne({ userId });
     if (existing) {

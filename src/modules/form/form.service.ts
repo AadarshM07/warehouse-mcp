@@ -15,7 +15,7 @@ export interface FormQuestion {
 export interface FormSession {
   _id?: ObjectId;
   userId: string;
-  formType: 'register_sku' | 'create_profile' | 'submit_proposal';
+  formType: 'register_sku' | 'create_profile' | 'submit_proposal' | 'create_warehouse' | 'create_reorder_contract';
   currentStep: number;
   answers: Record<string, any>;
   createdAt: Date;
@@ -41,6 +41,17 @@ const FORM_QUESTIONS: Record<string, FormQuestion[]> = {
     { field: 'bulkQuantity', prompt: 'Enter the bulk quantity you can supply:', type: 'number', required: true },
     { field: 'unitCost', prompt: 'Enter the unit cost per item:', type: 'number', required: true },
   ],
+  create_warehouse: [
+    { field: 'warehouseId', prompt: 'Please enter the unique warehouse ID (e.g., WH-EAST):', type: 'string', required: true },
+    { field: 'name', prompt: 'Please enter the name of the warehouse:', type: 'string', required: true },
+    { field: 'location', prompt: 'Please enter the physical location or address of the warehouse:', type: 'string', required: true },
+  ],
+  create_reorder_contract: [
+    { field: 'sku', prompt: 'Please enter the SKU code (e.g., DDR5-001):', type: 'string', required: true },
+    { field: 'reorderPoint', prompt: 'Enter the reorder point (minimum stock level, e.g., 10):', type: 'number', required: true },
+    { field: 'reorderQuantity', prompt: 'Enter the reorder quantity (amount to order when triggered, e.g., 50):', type: 'number', required: true },
+    { field: 'supplierId', prompt: 'Enter the preferred Supplier ID (userId):', type: 'string', required: true },
+  ],
 };
 
 @Injectable({ deps: [DatabaseService, InventoryService, SupplierService, PurchasingService] })
@@ -61,7 +72,7 @@ export class FormService {
       throw new Error(`Invalid form type: ${formType}. Supported types: ${Object.keys(FORM_QUESTIONS).join(', ')}`);
     }
 
-    if (formType === 'register_sku' && role !== 'manager' && role !== 'admin') {
+    if (['register_sku', 'create_warehouse', 'create_reorder_contract'].includes(formType) && role !== 'manager' && role !== 'admin') {
       throw new Error('Unauthorized: Only warehouse managers can fill this form.');
     }
 
@@ -224,6 +235,19 @@ export class FormService {
         answers.warehouseId,
         Number(answers.bulkQuantity),
         Number(answers.unitCost)
+      );
+    } else if (formType === 'create_warehouse') {
+      result = await this.inventoryService.createWarehouse(
+        answers.warehouseId,
+        answers.name,
+        answers.location
+      );
+    } else if (formType === 'create_reorder_contract') {
+      result = await this.purchasingService.createReorderContract(
+        answers.sku,
+        Number(answers.reorderPoint),
+        Number(answers.reorderQuantity),
+        answers.supplierId
       );
     }
 
